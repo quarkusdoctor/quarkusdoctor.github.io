@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>quarkus-doctor — config vs Kubernetes, before you deploy</title>
+  <meta name="description" content="Guidelines and install instructions for quarkus-doctor, a Java Maven plugin that compares Quarkus application.properties with Kubernetes, Helm, and Kustomize manifests.">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="site.css">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="top">
+    <div class="wrap top-inner">
+      <a class="brand" href="#top">quarkus-doctor</a>
+      <nav>
+        <a href="#guidelines">Guidelines</a>
+        <a href="#install">Install</a>
+        <a href="#use">Usage</a>
+        <a href="#rules">Rules</a>
+        <a href="#ignore">Ignore</a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="main">
+    <section class="hero wrap" id="top">
+      <p class="kicker">Java CLI + Maven plugin · JDK 11+ · no Node · no cluster</p>
+      <h1>Catch Quarkus config bugs that Kubernetes linters never open.</h1>
+      <p class="lead">
+        quarkus-doctor compares <code>application.properties</code> / <code>application.yaml</code>
+        with Kubernetes, Helm, and Kustomize manifests <strong>in CI</strong>.
+        KubeLinter, Checkov, and Trivy never read Quarkus config.
+        Quarkus itself only fails at <em>startup</em>.
+      </p>
+      <p class="banner">Early preview. Not on Maven Central. A green scan means “no hits in the current rule set,” not a full security audit.</p>
+    </section>
+
+    <section class="wrap" id="guidelines">
+      <h2>Guidelines</h2>
+      <ol class="guidelines">
+        <li>
+          <strong>Run it before the image ships.</strong>
+          Bind the Maven goal to <code>verify</code> (or run the CLI in CI).
+          The point is to fail the build, not the pod.
+        </li>
+        <li>
+          <strong>This is not a replacement for KubeLinter or Trivy.</strong>
+          Those tools own CIS, RBAC, and CVE scans.
+          This tool owns Quarkus config × this repo’s YAML × JVM/native facts.
+        </li>
+        <li>
+          <strong>Green is not an audit.</strong>
+          If a class of bug is not in the rule table below, it will not fail the scan.
+        </li>
+        <li>
+          <strong>GitOps in another repo is normal.</strong>
+          When this module has no Deployment/Helm/Kustomize, missing env is <em>info</em>, not a warning.
+          If YAML exists here but env is injected elsewhere, ignore <code>ENV_VAR_NOT_IN_MANIFEST</code>.
+        </li>
+        <li>
+          <strong>Do not treat <code>--fix</code> as a formatter.</strong>
+          It applies a small set of safe manifest edits and skips Helm templates.
+        </li>
+        <li>
+          <strong>Secrets in Git stay in Git.</strong>
+          <code>${OIDC_SECRET:the-real-value}</code> is still a secret in history.
+          Use a Kubernetes Secret and <code>${OIDC_SECRET}</code> with no default.
+        </li>
+      </ol>
+    </section>
+
+    <section class="wrap" id="install">
+      <h2>Install from source</h2>
+      <p>Requires <strong>JDK 11+</strong> and Maven 3.9+. Clone the source, install once into your local <code>.m2</code>:</p>
+      <pre><code>git clone https://github.com/fsmutimeer/quarkus-doctor.git
+cd quarkus-doctor
+mvn install</code><button type="button" class="copy" data-copy>Copy</button></pre>
+      <p>Source: <a href="https://github.com/fsmutimeer/quarkus-doctor">github.com/fsmutimeer/quarkus-doctor</a>. The plugin is not published to Maven Central yet.</p>
+    </section>
+
+    <section class="wrap" id="use">
+      <h2>Usage</h2>
+
+      <h3>Maven plugin (recommended)</h3>
+      <p>Add this to the application <code>pom.xml</code> after <code>mvn install</code>:</p>
+      <pre><code>&lt;plugin&gt;
+  &lt;groupId&gt;io.quarkusdoctor&lt;/groupId&gt;
+  &lt;artifactId&gt;quarkus-doctor-maven-plugin&lt;/artifactId&gt;
+  &lt;version&gt;1.0.0&lt;/version&gt;
+  &lt;executions&gt;
+    &lt;execution&gt;
+      &lt;phase&gt;verify&lt;/phase&gt;
+      &lt;goals&gt;&lt;goal&gt;scan&lt;/goal&gt;&lt;/goals&gt;
+    &lt;/execution&gt;
+  &lt;/executions&gt;
+&lt;/plugin&gt;</code><button type="button" class="copy" data-copy>Copy</button></pre>
+      <p>One-shot, no binding:</p>
+      <pre><code>mvn io.quarkusdoctor:quarkus-doctor-maven-plugin:1.0.0:scan</code><button type="button" class="copy" data-copy>Copy</button></pre>
+      <p>
+        Options (also <code>-Dquarkus.doctor.*</code>):
+        <code>failOnError</code> (default true),
+        <code>failOnWarning</code> (default false),
+        <code>fix</code> (default false),
+        <code>ignore</code>.
+        The plugin writes <code>target/quarkus-doctor.json</code>.
+      </p>
+
+      <h3>CLI</h3>
+      <pre><code>mvn -pl core -am package
+java -jar core/target/quarkus-doctor-core-1.0.0.jar /path/to/quarkus-project
+java -jar core/target/quarkus-doctor-core-1.0.0.jar . --ci</code><button type="button" class="copy" data-copy>Copy</button></pre>
+      <ul>
+        <li><code>--ci</code> — also fail on warnings</li>
+        <li><code>--json</code> — print findings as JSON</li>
+        <li><code>--fix</code> — apply safe manifest edits (skips Helm)</li>
+        <li><code>--ignore CODE,CODE</code> — skip rules</li>
+        <li><code>--report path</code> — write a JSON report</li>
+      </ul>
+
+      <h3>GitHub Action</h3>
+      <p>After the repo is public, point a workflow at it. The action builds the CLI from source, then scans <code>path</code>.</p>
+      <pre><code>- uses: fsmutimeer/quarkus-doctor@main
+  with:
+    path: .
+    fail-on-warning: "false"</code><button type="button" class="copy" data-copy>Copy</button></pre>
+    </section>
+
+    <section class="wrap" id="rules">
+      <h2>What it flags</h2>
+      <p>Errors fail the build by default. Warnings do not, unless you pass <code>--ci</code> / <code>failOnWarning</code>.</p>
+
+      <h3>Errors</h3>
+      <table>
+        <thead>
+          <tr><th>Code</th><th>When it fires</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>BUILD_TIME_NULL_ENV</code></td><td>Build-time property uses <code>${VAR}</code> with no default. Quarkus can silently resolve it to null at package time.</td></tr>
+          <tr><td><code>SECRET_IN_ENV_DEFAULT</code></td><td>A secret key uses <code>${VAR:literal}</code> — the default <em>is</em> the credential.</td></tr>
+          <tr><td><code>PLAINTEXT_DB_PASSWORD</code></td><td>Password (or similar) is a literal in config, not an env/secret reference.</td></tr>
+          <tr><td><code>LOCALHOST_JDBC_IN_K8S</code> / <code>LOCALHOST_IN_K8S</code></td><td>JDBC, Mongo, Redis, Kafka, or REST client URL is <code>localhost</code> / <code>127.0.0.1</code> (literal or default).</td></tr>
+          <tr><td><code>TLS_VERIFICATION_DISABLED</code></td><td><code>trust-all=true</code> or <code>tls.verification=none</code>.</td></tr>
+          <tr><td><code>CORS_WILDCARD_WITH_CREDENTIALS</code></td><td>CORS origins include <code>*</code> and credentials are enabled.</td></tr>
+          <tr><td><code>SWAGGER_IN_PROD</code></td><td><code>quarkus.swagger-ui.always-include=true</code> (or <code>%prod</code> enable).</td></tr>
+          <tr><td><code>METRICS_PORT_NOT_EXPOSED</code></td><td>Management interface is on a separate port that the container spec does not expose. Skipped when there are no containers.</td></tr>
+        </tbody>
+      </table>
+
+      <h3>Warnings and info</h3>
+      <table>
+        <thead>
+          <tr><th>Code</th><th>Level</th><th>When it fires</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>ENV_VAR_NOT_IN_MANIFEST</code></td><td>warn / info</td><td><code>${VAR}</code> is not in this repo’s YAML. Info when there is no local manifest.</td></tr>
+          <tr><td><code>MISSING_RESOURCE_LIMITS</code></td><td>warn</td><td>Container has no cpu/memory requests or limits.</td></tr>
+          <tr><td><code>MISSING_LIVENESS_PROBE</code> / <code>MISSING_READINESS_PROBE</code></td><td>warn</td><td>Quarkus already ships <code>/q/health/*</code>.</td></tr>
+          <tr><td><code>HEALTH_PATH_WRONG</code></td><td>warn</td><td>Probe is not SmallRye Health (for example <code>/actuator/health</code>).</td></tr>
+          <tr><td><code>IMAGE_MISMATCH</code></td><td>warn</td><td><code>quarkus.container-image.*</code> does not match the manifest image.</td></tr>
+          <tr><td><code>NATIVE_RESOURCES_PADDED</code></td><td>warn</td><td>Native image requesting ≥ 1Gi.</td></tr>
+          <tr><td><code>SSL_REDIRECT_IN_POD</code></td><td>warn</td><td><code>quarkus.http.insecure-requests</code> breaks HTTP probes behind an ingress.</td></tr>
+          <tr><td><code>MISSING_STARTUP_PROBE</code></td><td>info</td><td>Native image + liveness, no startupProbe.</td></tr>
+          <tr><td><code>HARDCODED_NODEPORT</code></td><td>info</td><td>Pinned nodePort; common “port already allocated” on redeploy.</td></tr>
+        </tbody>
+      </table>
+      <p class="note">Build-time keys are a prefix list, not Quarkus’s official lock-icon catalog. <code>quarkus.swagger-ui.path</code> is not treated as build-time.</p>
+    </section>
+
+    <section class="wrap" id="ignore">
+      <h2>Ignoring a rule</h2>
+      <p>Create <code>.quarkus-doctor.yml</code> in the module root:</p>
+      <pre><code>ignore:
+  - ENV_VAR_NOT_IN_MANIFEST</code><button type="button" class="copy" data-copy>Copy</button></pre>
+      <p>Same thing from the CLI or Maven: <code>--ignore ENV_VAR_NOT_IN_MANIFEST</code> / <code>-Dquarkus.doctor.ignore=ENV_VAR_NOT_IN_MANIFEST</code>.</p>
+    </section>
+
+    <section class="wrap" id="limits">
+      <h2>Known limits</h2>
+      <ul>
+        <li>If YAML exists in this repo but env is injected by another chart, ignore <code>ENV_VAR_NOT_IN_MANIFEST</code>.</li>
+        <li>Build-time detection is still a prefix list, not the lock-icon catalog.</li>
+        <li>It never talks to a cluster and does not scan running pods.</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="wrap">
+    <p>Apache License 2.0. Source and issue tracker live in the GitHub repository — this page is documentation only.</p>
+  </footer>
+
+  <script>
+    document.querySelectorAll("[data-copy]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var pre = btn.parentElement;
+        var code = pre.querySelector("code");
+        if (!code) return;
+        navigator.clipboard.writeText(code.innerText).then(function () {
+          btn.textContent = "Copied";
+          setTimeout(function () { btn.textContent = "Copy"; }, 1500);
+        });
+      });
+    });
+  </script>
+</body>
+</html>
